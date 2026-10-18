@@ -16,6 +16,7 @@
  *   bat_ok      →  (caller: Address, success_count: u32)
  *   bat_abort   →  caller: Address
  *   sim_done    →  (caller: Address, success_count: u32)
+ *   fee_chg     →  (caller: Address, op_count: u32, fee: u32)
  *
  * Two decoding entrypoints are provided:
  *
@@ -61,6 +62,8 @@ export const BATCHER_EVENT_TOPICS = {
   bat_abort: "bat_abort",
   /** Emitted by `simulate_batch` on completion. */
   sim_done: "sim_done",
+  /** Emitted by `execute_batch` on success with (caller, op_count, fee). */
+  fee_chg: "fee_chg",
 } as const;
 
 export type BatcherEventAction = (typeof BATCHER_EVENT_TOPICS)[keyof typeof BATCHER_EVENT_TOPICS];
@@ -102,13 +105,22 @@ export interface BatcherSimDoneEvent {
   successCount: string;
 }
 
+/** Emitted by `execute_batch` on success: (caller, op_count, fee). */
+export interface BatcherFeeChgEvent {
+  action: "fee_chg";
+  caller: string;
+  opCount: string;
+  fee: string;
+}
+
 export type BatcherEvent =
   | BatcherInitEvent
   | BatcherBatStartEvent
   | BatcherExecutedEvent
   | BatcherBatOkEvent
   | BatcherBatAbortEvent
-  | BatcherSimDoneEvent;
+  | BatcherSimDoneEvent
+  | BatcherFeeChgEvent;
 
 /**
  * Transaction-level metadata attached by {@link decodeBatcherEvent}.
@@ -472,6 +484,7 @@ const PAYLOAD_ARITY: Record<BatcherEventAction, number> = {
   bat_ok: 2,
   bat_abort: 1,
   sim_done: 2,
+  fee_chg: 3,
 };
 
 const KNOWN_ACTIONS = new Set<string>(Object.values(BATCHER_EVENT_TOPICS));
@@ -550,7 +563,51 @@ function decodeBatcherPayload(
       return { action: known, caller: address(0, "caller") };
     case "sim_done":
       return { action: known, caller: address(0, "caller"), successCount: u32(1, "successCount") };
+    case "fee_chg":
+      return {
+        action: known,
+        caller: address(0, "caller"),
+        opCount: u32(1, "opCount"),
+        fee: u32(2, "fee"),
+      };
   }
+}
+
+/**
+ * Decode a raw mux-batcher `fee_chg` event into a typed
+ * `{ caller, opCount, fee }` object.
+ *
+ * Fail-closed: throws {@link BatcherEventDecodeError} when the topics do not
+ * match the batcher tag/`fee_chg` action, the payload arity is wrong, or any
+ * payload element has the wrong type. Never returns a partially-populated
+ * object.
+ *
+ * @example
+ * ```ts
+ * import { decodeBatcherFeeEvent } from "./batcher-events";
+ * const event = decodeBatcherFeeEvent(rawEvent);
+ * console.log(`charged ${event.fee} for ${event.opCount} ops`);
+ * ```
+ */
+export function decodeBatcherFeeEvent(
+  event: BatcherRawEvent,
+  context: BatcherEventContext = {},
+): { caller: string; opCount: string; fee: string } & BatcherEventMeta {
+  const decoded = decodeBatcherEvent(event, context);
+  if (decoded.action !== "fee_chg") {
+    throw new BatcherEventDecodeError(
+      BATCHER_EVENT_DECODE_ERROR_CODES.UnknownAction,
+      `expected mux_bat.fee_chg event, got mux_bat.${decoded.action}`,
+      { ...decoded, action: decoded.action },
+    );
+  }
+  return {
+    caller: decoded.caller,
+    opCount: decoded.opCount,
+    fee: decoded.fee,
+    txHash: decoded.txHash,
+    correlationId: decoded.correlationId,
+  };
 }
 
 function requireAddress(raw: unknown, action: string, field: string, errCtx: ErrCtx): string {

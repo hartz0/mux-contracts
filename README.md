@@ -62,8 +62,8 @@ Clients cannot bypass policy: privileged writes are deny-by-default and require 
 
 The CI pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds every contract to `wasm32-unknown-unknown` and enforces a **fail-closed WASM size budget**: if any compiled contract exceeds the configured limit, the build fails and the PR cannot merge.
 
-- **Budget:** `MAX_WASM_SIZE_BYTES` (default `262144` bytes / 256 KiB) is defined in the `wasm-size-budget` job in `.github/workflows/ci.yml`.
-- **Adjusting the budget:** edit `MAX_WASM_SIZE_BYTES` in that job. Raising it is a deliberate, reviewable change — keep it as small as the largest legitimate contract allows so accidental bloat is caught early.
+- **Budget:** `WASM_SIZE_BUDGET_BYTES` (default `65536` bytes / 64 KiB per contract) is defined in `.github/workflows/ci.yml` and consumed by `scripts/check-contract-sizes.sh`.
+- **Adjusting the budget:** edit `WASM_SIZE_BUDGET_BYTES` in that job. Raising it is a deliberate, reviewable change — keep it as small as the largest legitimate contract allows so accidental bloat is caught early.
 - **Artifacts:** the built `.wasm` files are uploaded as the `wasm-artifacts` artifact on every CI run, so contributors and reviewers can download and inspect the exact binaries that were size-checked.
 
 To reproduce the check locally:

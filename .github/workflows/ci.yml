@@ -9,7 +9,9 @@ env:
   CARGO_TERM_COLOR: always
   # Fail-closed wasm size budget (bytes). Any compiled contract wasm larger
   # than this limit fails the build. Adjust deliberately and document why.
-  WASM_SIZE_BUDGET_BYTES: "262144"
+  # Per-contract budget, consumed by scripts/check-contract-sizes.sh which
+  # reads the same `WASM_SIZE_BUDGET_BYTES` variable.
+  WASM_SIZE_BUDGET_BYTES: "65536"
 
 jobs:
   build-and-test:

@@ -7,6 +7,7 @@ import {
   decodeBatcherEvent,
   decodeBatcherEvents,
   decodeBatchOutcome,
+  decodeBatcherFeeEvent,
   parseBatcherEvent,
   type BatcherEvent,
   type BatcherEventDecodeErrorCode,
@@ -421,7 +422,7 @@ describe("BATCHER_CONTRACT_TAG literal value (closes #918)", () => {
 });
 
 describe("BATCHER_EVENT_TOPICS literal values (closes #918)", () => {
-  it("deep-equals the six documented key/value pairs", () => {
+  it("deep-equals the seven documented key/value pairs", () => {
     expect(BATCHER_EVENT_TOPICS).toEqual({
       init: "init",
       bat_start: "bat_start",
@@ -429,6 +430,7 @@ describe("BATCHER_EVENT_TOPICS literal values (closes #918)", () => {
       bat_ok: "bat_ok",
       bat_abort: "bat_abort",
       sim_done: "sim_done",
+      fee_chg: "fee_chg",
     });
   });
 });
@@ -521,6 +523,78 @@ describe("decodeBatchOutcome (closes #953)", () => {
     );
     expectDecodeError(
       () => decodeBatchOutcome({ topic: [BATCHER_CONTRACT_TAG, "bat_ok"], value: [CALLER, 1] }),
+      BATCHER_EVENT_DECODE_ERROR_CODES.MissingTxHash,
+    );
+  });
+});
+
+// ── decodeBatcherFeeEvent (closes #950) ───────────────────────────────────────
+
+describe("decodeBatcherFeeEvent (closes #950)", () => {
+  it("decodes a valid fee_chg event into typed caller/opCount/fee", () => {
+    const event = rpcEvent("fee_chg", [CALLER, OP_COUNT, "300"]);
+    const result = decodeBatcherFeeEvent(event);
+    expect(result.caller).toBe(CALLER);
+    expect(result.opCount).toBe(OP_COUNT);
+    expect(result.fee).toBe("300");
+    expect(result.txHash).toBe(TX_A);
+    expect(result.correlationId).toBe(TX_A);
+  });
+
+  it("fails closed for a wrong action topic", () => {
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("bat_ok", [CALLER, 4])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.UnknownAction,
+      { action: "bat_ok" },
+    );
+  });
+
+  it("fails closed for a truncated payload", () => {
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("fee_chg", [CALLER])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.MalformedPayload,
+      { action: "fee_chg" },
+    );
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("fee_chg", [CALLER, OP_COUNT])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.MalformedPayload,
+      { action: "fee_chg" },
+    );
+  });
+
+  it("fails closed for payload with wrong element types", () => {
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("fee_chg", ["not-an-address", OP_COUNT, "300"])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.InvalidAddress,
+      { action: "fee_chg", field: "caller" },
+    );
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("fee_chg", [CALLER, "not-a-u32", "300"])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.InvalidU32,
+      { action: "fee_chg", field: "opCount" },
+    );
+    expectDecodeError(
+      () => decodeBatcherFeeEvent(rpcEvent("fee_chg", [CALLER, OP_COUNT, "not-a-u32"])),
+      BATCHER_EVENT_DECODE_ERROR_CODES.InvalidU32,
+      { action: "fee_chg", field: "fee" },
+    );
+  });
+
+  it("fails closed for events from another contract", () => {
+    expectDecodeError(
+      () =>
+        decodeBatcherFeeEvent({
+          topic: ["mux_pol", "fee_chg"],
+          value: [CALLER, OP_COUNT, "300"],
+          txHash: TX_A,
+        }),
+      BATCHER_EVENT_DECODE_ERROR_CODES.NotBatcherEvent,
+    );
+  });
+
+  it("fails closed for a missing tx hash", () => {
+    expectDecodeError(
+      () => decodeBatcherFeeEvent({ topic: [BATCHER_CONTRACT_TAG, "fee_chg"], value: [CALLER, OP_COUNT, "300"] }),
       BATCHER_EVENT_DECODE_ERROR_CODES.MissingTxHash,
     );
   });

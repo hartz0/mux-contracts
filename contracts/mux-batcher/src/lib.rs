@@ -465,6 +465,16 @@ impl MuxBatcher {
             (caller.clone(), result.success_count, result.failure_count),
         );
 
+        // Emit fee_chg so off-chain indexers can reconcile estimated vs actual
+        // fees. Failed batches return early above; only successful batches
+        // reach this point. Fee mirrors estimate_fees(): op_count × FEE_PER_OP.
+        let fee = (ops.len() as u32).saturating_mul(FEE_PER_OP);
+        emit(
+            &env,
+            symbol_short!("fee_chg"),
+            (caller.clone(), ops.len() as u32, fee),
+        );
+
         // Emit a dedicated success event when every operation succeeded.
         if result.failure_count == 0 {
             emit(
@@ -982,6 +992,66 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(topic_action(&env, &events, 0), symbol_short!("bat_start"));
         assert_eq!(topic_action(&env, &events, 1), symbol_short!("bat_abort"));
+    }
+
+    #[test]
+    fn test_fee_chg_event_emitted_on_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, 3);
+        let result = client.try_execute_batch(&caller, &ops);
+        assert!(result.is_ok(), "batch must succeed: {result:?}");
+
+        let events = env.events().all();
+        // bat_start, executed, fee_chg, bat_ok
+        assert_eq!(events.len(), 4);
+
+        // Find the fee_chg event by topic action.
+        let fee_chg_idx = events.iter().position(|(_, topics, _)| {
+            Symbol::from_val(&env, &topics.get(1).unwrap()) == symbol_short!("fee_chg")
+        });
+        let fee_chg_idx = fee_chg_idx.expect("fee_chg event must be emitted");
+
+        let (_, _, data) = events.get(fee_chg_idx).unwrap();
+        let (ev_caller, ev_op_count, ev_fee): (Address, u32, u32) =
+            FromVal::from_val(&env, data);
+
+        assert_eq!(ev_caller, caller);
+        assert_eq!(ev_op_count, 3);
+        assert_eq!(ev_fee, 3 * FEE_PER_OP);
+        assert_eq!(ev_fee, client.estimate_fees(&3).unwrap());
+    }
+
+    #[test]
+    fn test_fee_chg_event_not_emitted_on_failure() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        // Required op targeting a non-existent contract → batch aborts.
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+        let result = client.try_execute_batch(&caller, &ops);
+        assert!(result.is_err(), "batch must fail: {result:?}");
+
+        let events = env.events().all();
+        // bat_start, bat_abort — no fee_chg
+        assert_eq!(events.len(), 2);
+        assert!(!events.iter().any(|(_, topics, _)| {
+            Symbol::from_val(&env, &topics.get(1).unwrap()) == symbol_short!("fee_chg")
+        }), "fee_chg must not be emitted on failed batch");
     }
 
     #[test]
